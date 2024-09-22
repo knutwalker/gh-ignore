@@ -15,12 +15,16 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const known_folders = b.dependency("known-folders", .{}).module("known-folders");
+
     const exe = b.addExecutable(.{
         .name = "gh-ignorer",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    exe.root_module.addImport("known-folders", known_folders);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
