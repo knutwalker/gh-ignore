@@ -19,10 +19,11 @@ pub fn main() !void {
     var cache_dir = try cache_root_dir.makeOpenPath("gh-ignorer", .{});
     defer cache_dir.close();
 
-    var checkout_dir = try ensure_repo(alloc, cache_dir);
+    // TODO: arg to specify expiration time
+    var checkout_dir = try ensure_repo(alloc, cache_dir, 86_400);
     defer checkout_dir.close();
 
-    const selected = try select_ignore_files(alloc, &checkout_dir) orelse return;
+    const selected = try try_select_ignore_files(alloc, &checkout_dir) orelse return;
     defer alloc.free(selected);
 
     const file_hashes = try ignore_file_hashes(alloc, &checkout_dir, selected);
@@ -34,24 +35,92 @@ pub fn main() !void {
     try copy_ignore_files(&checkout_dir, selected, file_hashes, stdout.writer());
 }
 
-fn ensure_repo(alloc: std.mem.Allocator, cache_dir: Dir) !Dir {
-    cache_dir.access("checkout", .{}) catch {
-        const git_clone_cmd = [_][]const u8{ "git", "clone", "https://github.com/github/gitignore.git", "checkout" };
-        var clone_dir = std.process.Child.init(&git_clone_cmd, alloc);
-        clone_dir.stdin_behavior = .Ignore;
-        clone_dir.cwd_dir = cache_dir;
+fn ensure_repo(alloc: std.mem.Allocator, cache_dir: Dir, expire_secs: u64) !Dir {
+    update_repo(alloc, cache_dir, expire_secs) catch |err| switch (err) {
+        error.FileNotFound => try clone_repo(alloc, cache_dir),
+        else => return err,
+    };
 
-        const term = try clone_dir.spawnAndWait();
+    const checkout_dir = try cache_dir.openDir("checkout", .{ .iterate = true });
+    return checkout_dir;
+}
+
+fn clone_repo(alloc: std.mem.Allocator, cache_dir: Dir) !void {
+    const git_clone_cmd = [_][]const u8{ "git", "clone", "https://github.com/github/gitignore.git", "checkout" };
+    var clone_dir = std.process.Child.init(&git_clone_cmd, alloc);
+    clone_dir.stdin_behavior = .Ignore;
+    clone_dir.cwd_dir = cache_dir;
+
+    const term = try clone_dir.spawnAndWait();
+    switch (term) {
+        .Exited => |res| {
+            if (res != 0) return error.CommandFailed;
+        },
+        else => return error.CommandFailed,
+    }
+
+    const metadata_file = try cache_dir.createFile("metadata", .{ .exclusive = true });
+    defer metadata_file.close();
+
+    try write_metadata(metadata_file);
+}
+
+fn write_metadata(file: std.fs.File) !void {
+    const now = std.time.timestamp();
+    const metadata =
+        \\Version: 1
+        \\Last-Update: {d}
+        \\
+    ;
+    try std.fmt.format(file.writer(), metadata, .{now});
+}
+
+fn update_repo(alloc: std.mem.Allocator, cache_dir: Dir, expire_secs: u64) !void {
+    var buf: [64]u8 = undefined;
+    const metadata_content = try cache_dir.readFile("metadata", &buf);
+    var meta_lines = std.mem.splitSequence(u8, metadata_content, "\n");
+
+    var version = meta_lines.next() orelse return error.EmptyMetadata;
+    version = strip_prefix(u8, version, "Version: ") orelse return error.InvalidMetadata;
+    if (std.mem.eql(u8, version, "1") == false) return error.InvalidMetadataVersion;
+
+    var last_update = meta_lines.next() orelse return error.InvalidMetadata;
+    last_update = strip_prefix(u8, last_update, "Last-Update: ") orelse return error.InvalidMetadata;
+    const last_update_time = std.fmt.parseInt(i64, last_update, 10) catch return error.InvalidMetadataTimestamp;
+
+    if (std.time.timestamp() - last_update_time > expire_secs) {
+        var repo = try cache_dir.openDir("checkout", .{});
+        defer repo.close();
+
+        const git_pull_cmd = [_][]const u8{ "git", "pull" };
+        var git_pull = std.process.Child.init(&git_pull_cmd, alloc);
+        git_pull.stdin_behavior = .Ignore;
+        git_pull.cwd_dir = repo;
+
+        const term = try git_pull.spawnAndWait();
         switch (term) {
             .Exited => |res| {
                 if (res != 0) return error.CommandFailed;
             },
             else => return error.CommandFailed,
         }
-    };
 
-    const checkout_dir = try cache_dir.openDir("checkout", .{ .iterate = true });
-    return checkout_dir;
+        const metadata_file = try cache_dir.openFile("metadata", .{ .mode = .write_only });
+        defer metadata_file.close();
+
+        try write_metadata(metadata_file);
+    }
+}
+
+fn try_select_ignore_files(alloc: std.mem.Allocator, repo: *Dir) !?[]const u8 {
+    return select_ignore_files(alloc, repo) catch |err| switch (err) {
+        error.CommandFailed => return null,
+        error.BrokenPipe => {
+            std.log.err("Could now call `fzf`. Is it installed?", .{});
+            return null;
+        },
+        else => return err,
+    };
 }
 
 fn select_ignore_files(alloc: std.mem.Allocator, repo: *Dir) !?[]const u8 {
@@ -87,11 +156,13 @@ fn select_ignore_files(alloc: std.mem.Allocator, repo: *Dir) !?[]const u8 {
         var checkout_files = try repo.walk(alloc);
         defer checkout_files.deinit();
 
+        const fzf_in = fzf_input.writer();
+
         while (try checkout_files.next()) |entry| {
             if (entry.kind == .file) {
                 const extension = std.fs.path.extension(entry.path);
                 if (std.mem.eql(u8, extension, ".gitignore")) {
-                    try std.fmt.format(fzf_input.writer(), "{s}\n", .{entry.path});
+                    try std.fmt.format(fzf_in, "{s}\n", .{entry.path});
                     max_bytes += entry.path.len + 2;
                 }
             }
@@ -162,5 +233,13 @@ fn copy_ignore_files(repo: *Dir, ignore_files: []const u8, file_hashes: []const 
 
             std.debug.assert(bytes_written == ignore_meta.size());
         }
+    }
+}
+
+fn strip_prefix(comptime T: type, haystack: []const T, prefix: []const T) ?[]const T {
+    if (std.mem.startsWith(T, haystack, prefix)) {
+        return haystack[prefix.len..];
+    } else {
+        return null;
     }
 }
