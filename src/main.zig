@@ -7,17 +7,16 @@ const cache = @import("cache.zig");
 pub const known_folders_config = .{ .xdg_on_mac = true };
 
 pub fn main() !u8 {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var ally = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer _ = ally.deinit();
 
-    const alloc = gpa.allocator();
+    const alloc = ally.allocator();
 
     const opts = args.parse(alloc) catch |err| switch (err) {
         error.ExitSuccess => return 0,
         error.ExitArgs => return 2,
         else => return err,
     };
-    defer opts.deinit(alloc);
 
     try run(alloc, opts);
     return 0;
@@ -39,16 +38,8 @@ fn run(alloc: mem.Allocator, opts: args.Opts) !void {
     defer checkout_dir.close();
 
     const selected = try try_select_ignore_files(alloc, checkout_dir) orelse return;
-    defer {
-        for (selected) |sel| alloc.free(sel);
-        alloc.free(selected);
-    }
 
     const file_hashes = try ignore_file_hashes(alloc, checkout_dir, selected);
-    defer {
-        for (file_hashes) |hash| alloc.free(hash);
-        alloc.free(file_hashes);
-    }
 
     const output = opts.output;
     var outfile, const close_out =
@@ -113,25 +104,17 @@ fn select_ignore_files(alloc: mem.Allocator, repo: Dir) !?[][]const u8 {
     try fzf_proc.spawn();
 
     const fzf_input = fzf_proc.stdin.?;
-
     const fzf_input_bytes = try get_fzf_input(alloc, repo);
-    defer alloc.free(fzf_input_bytes);
-
     try fzf_input.writeAll(fzf_input_bytes);
 
     const fzf_out = try fzf_proc.stdout.?.readToEndAlloc(alloc, fzf_input_bytes.len);
-    defer alloc.free(fzf_out);
 
     const term = try fzf_proc.wait();
     switch (term) {
         .Exited => |res| switch (res) {
             // Normal exit
             0 => {
-                var items = std.ArrayList([]const u8).init(alloc);
-                errdefer {
-                    for (items.items) |item| alloc.free(item);
-                    items.deinit();
-                }
+                var items = std.ArrayList([:0]const u8).init(alloc);
 
                 var lines = mem.splitScalar(u8, mem.trim(u8, fzf_out, &std.ascii.whitespace), '\n');
                 while (lines.next()) |line| {
@@ -156,13 +139,8 @@ fn select_ignore_files(alloc: mem.Allocator, repo: Dir) !?[][]const u8 {
 
 fn get_fzf_input(alloc: mem.Allocator, repo: Dir) ![:0]const u8 {
     var checkout_files = try repo.walk(alloc);
-    defer checkout_files.deinit();
 
     var fzf_in = std.ArrayList([]const u8).init(alloc);
-    defer {
-        for (fzf_in.items) |in| if (in.len > 0) alloc.free(in);
-        fzf_in.deinit();
-    }
 
     while (try checkout_files.next()) |entry| {
         if (entry.kind == .file) {
@@ -198,7 +176,6 @@ fn get_fzf_input(alloc: mem.Allocator, repo: Dir) ![:0]const u8 {
 
 fn ignore_file_hashes(alloc: mem.Allocator, repo: Dir, all_items: [][]const u8) ![][]const u8 {
     var git_hash_cmd = std.ArrayList([]const u8).init(alloc);
-    defer git_hash_cmd.deinit();
 
     try git_hash_cmd.appendSlice(&.{ "git", "hash-object", "-t", "blob" });
     try git_hash_cmd.appendSlice(all_items);
@@ -208,9 +185,6 @@ fn ignore_file_hashes(alloc: mem.Allocator, repo: Dir, all_items: [][]const u8) 
         .argv = git_hash_cmd.items,
         .cwd_dir = repo,
     });
-
-    alloc.free(hash_out.stderr);
-    defer alloc.free(hash_out.stdout);
 
     const output = try alloc.alloc([]const u8, all_items.len);
     std.debug.assert(output.len == all_items.len);

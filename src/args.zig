@@ -6,17 +6,10 @@ pub const Opts = struct {
     update: bool,
     output: [:0]const u8,
     cache: [:0]const u8,
-
-    pub fn deinit(self: Opts, alloc: mem.Allocator) void {
-        alloc.free(self.output);
-        alloc.free(self.cache);
-    }
 };
 
 pub fn parse(alloc: mem.Allocator) !Opts {
     const default_cache = default_cache_dir(alloc);
-    var free_default = default_cache != null;
-    defer if (free_default) alloc.free(default_cache.?);
 
     const opts = parse_args_from_env(alloc) catch |err| switch (err) {
         error.Help => {
@@ -42,13 +35,9 @@ pub fn parse(alloc: mem.Allocator) !Opts {
         else => return err,
     };
 
-    const output = opts.output orelse try alloc.dupeZ(u8, DEFAULT_OUTPUT);
-    errdefer alloc.free(output);
+    const output = opts.output orelse DEFAULT_OUTPUT;
 
-    const cache_dir = opts.cache orelse cache: {
-        free_default = false;
-        break :cache default_cache;
-    };
+    const cache_dir = opts.cache orelse default_cache;
     if (cache_dir == null) {
         std.debug.print("Missing required argument --cache\n", .{});
         return error.ExitArgs;
@@ -85,7 +74,6 @@ const HELP =
 
 fn default_cache_dir(alloc: mem.Allocator) ?[:0]const u8 {
     const kf_cache = (kf.getPath(alloc, .cache) catch return null) orelse return null;
-    defer alloc.free(kf_cache);
     return std.fs.path.joinZ(alloc, &.{ kf_cache, APP }) catch return null;
 }
 
@@ -107,21 +95,14 @@ const Args = struct {
     update: bool = false,
     output: ?[:0]const u8 = null,
     cache: ?[:0]const u8 = null,
-
-    fn deinit(self: Args, alloc: mem.Allocator) void {
-        if (self.output) |o| alloc.free(o);
-        if (self.cache) |o| alloc.free(o);
-    }
 };
 
 fn parse_args_from_env(alloc: mem.Allocator) !Args {
     const args = try std.process.argsAlloc(alloc);
-    defer std.process.argsFree(alloc, args);
-
-    return try parse_args(alloc, args[1..]);
+    return try parse_args(args[1..]);
 }
 
-fn parse_args(alloc: mem.Allocator, args: anytype) !Args {
+fn parse_args(args: anytype) !Args {
     var help_requested = false;
     var version_requested = false;
 
@@ -141,7 +122,6 @@ fn parse_args(alloc: mem.Allocator, args: anytype) !Args {
     var file_arg: enum { allow, expect, forbid } = .allow;
 
     var opts: Args = .{};
-    errdefer opts.deinit(alloc);
 
     for (args) |arg| {
         if (raw_args == false and mem.eql(u8, arg, "--")) {
@@ -151,13 +131,13 @@ fn parse_args(alloc: mem.Allocator, args: anytype) !Args {
 
         if (cache_arg == .expect) {
             cache_arg = .forbid;
-            opts.cache = try alloc.dupeZ(u8, arg);
+            opts.cache = arg;
             continue;
         }
 
         if (file_arg == .expect) {
             file_arg = .forbid;
-            opts.output = try alloc.dupeZ(u8, arg);
+            opts.output = arg;
             continue;
         }
 
@@ -182,7 +162,7 @@ fn parse_args(alloc: mem.Allocator, args: anytype) !Args {
                     return error.DuplicateArg;
                 }
                 file_arg = .forbid;
-                opts.output = try alloc.dupeZ(u8, arg[2..]);
+                opts.output = arg[2.. :0];
             } else {
                 std.debug.print("Unknown flag: {s}\n", .{arg});
                 return error.UnknownFlag;
