@@ -53,10 +53,10 @@ fn run(alloc: mem.Allocator, opts: args.Opts) !void {
     };
     defer if (close_out) outfile.close();
 
-    try copy_ignore_files(alloc, checkout_dir, selected, file_hashes, outfile.writer());
+    try copy_ignore_files(checkout_dir, selected, file_hashes, outfile);
 }
 
-fn try_select_ignore_files(alloc: mem.Allocator, repo: Dir) !?[][]const u8 {
+fn try_select_ignore_files(alloc: mem.Allocator, repo: Dir) !?[][:0]const u8 {
     return select_ignore_files(alloc, repo) catch |err| switch (err) {
         error.CommandFailed => return null,
         error.BrokenPipe => {
@@ -67,7 +67,7 @@ fn try_select_ignore_files(alloc: mem.Allocator, repo: Dir) !?[][]const u8 {
     };
 }
 
-fn select_ignore_files(alloc: mem.Allocator, repo: Dir) !?[][]const u8 {
+fn select_ignore_files(alloc: mem.Allocator, repo: Dir) !?[][:0]const u8 {
     const fzf_command = [_][]const u8{
         "fzf",
         "--ignore-case",
@@ -119,9 +119,9 @@ fn select_ignore_files(alloc: mem.Allocator, repo: Dir) !?[][]const u8 {
                 var lines = mem.splitScalar(u8, mem.trim(u8, fzf_out, &std.ascii.whitespace), '\n');
                 while (lines.next()) |line| {
                     const delimiter = mem.indexOfScalar(u8, line, 0x1f).?;
-                    const file_path = line[delimiter + 1 ..];
+                    const file_path = mem.trim(u8, line[delimiter + 1 ..], &std.ascii.whitespace);
                     std.debug.assert(file_path.len > 0);
-                    const item = try alloc.dupe(u8, file_path);
+                    const item = try alloc.dupeZ(u8, file_path);
                     try items.append(item);
                 }
 
@@ -202,46 +202,46 @@ fn ignore_file_hashes(alloc: mem.Allocator, repo: Dir, all_items: [][]const u8) 
 }
 
 fn copy_ignore_files(
-    alloc: mem.Allocator,
     repo: Dir,
-    selected_items: [][]const u8,
+    selected_items: [][:0]const u8,
     file_hashes: [][]const u8,
-    out: anytype,
+    out: std.fs.File,
 ) !void {
-    var buf = try alloc.alloc(u8, 64 * mem.page_size);
-    defer alloc.free(buf);
-
     const app = "GH-IGNORER";
+    const vec = std.posix.iovec_const;
 
-    for (selected_items, file_hashes) |item, file_hash| {
-        const file_path = mem.trim(u8, item, &std.ascii.whitespace);
-        var ignore_file = try repo.openFile(file_path, .{});
-        var ignore_meta = try ignore_file.metadata();
+    var meta_buf: [1024]u8 = undefined;
 
-        try out.print(
-            \\#### {0s} start, do not remote vvvvvvv ####
-            \\#### source: {1s}
-            \\#### size: {2d}
-            \\#### hash: {3s}
+    for (selected_items, file_hashes) |file_path, file_hash| {
+        const ignore_file = try repo.openFileZ(file_path, .{});
+        defer ignore_file.close();
+
+        const ignore_stat = try ignore_file.stat();
+
+        const metadata = try std.fmt.bufPrint(
+            &meta_buf,
+            \\# {0s} start, do not remote vvv
+            \\# source: {1s}
+            \\# size: {2d}
+            \\# hash: {3s}
             \\
-        , .{
-            app,
-            file_path,
-            ignore_meta.size(),
-            file_hash,
+            \\# {0s} end, do not remove ^^^^^
+            \\
+        ,
+            .{ app, file_path, ignore_stat.size, file_hash },
+        );
+
+        const trailer_start = mem.lastIndexOfScalar(u8, metadata, '#').? - 1;
+        const header = metadata[0..trailer_start];
+        const trailer = metadata[trailer_start..];
+
+        const header_vec = vec{ .base = header.ptr, .len = header.len };
+        const trailer_vec = vec{ .base = trailer.ptr, .len = trailer.len };
+        var headers_and_trailers = [_]vec{ header_vec, trailer_vec };
+
+        try out.writeFileAll(ignore_file, .{
+            .headers_and_trailers = &headers_and_trailers,
+            .header_count = 1,
         });
-
-        var bytes_written: u64 = 0;
-
-        while (true) {
-            const buf_size = try ignore_file.read(buf);
-            if (buf_size == 0) break;
-            try out.writeAll(buf[0..buf_size]);
-            bytes_written += buf_size;
-        }
-
-        try out.print("#### {0s} end, do not remove ^^^^^^^^^ ####\n", .{app});
-
-        std.debug.assert(bytes_written == ignore_meta.size());
     }
 }
