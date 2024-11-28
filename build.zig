@@ -56,11 +56,11 @@ pub fn build(b: *std.Build) !void {
 
     const targets: []const std.Target.Query = &.{
         .{ .cpu_arch = .aarch64, .os_tag = .macos, .abi = .none },
-        .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .gnu },
+        .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc },
         .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu },
         .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl },
         .{ .cpu_arch = .x86_64, .os_tag = .macos, .abi = .none },
-        .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu },
+        .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc },
         .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
         .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
     };
