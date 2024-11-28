@@ -1,7 +1,4 @@
-#### GH-IGNORER start, do not remote vvvvvvv ####
-#### source: Global/Vim.gitignore
-#### size: 261
-#### hash: 19fa63264c56a2e0e98aa45e12ab2f0ec50f5f42
+## Source: Global/Vim.gitignore
 # Swap
 [._]*.s[a-v][a-z]
 !*.svg  # comment out if you don't need vector files
@@ -21,14 +18,10 @@ Sessionx.vim
 tags
 # Persistent undo
 [._]*.un~
-#### GH-IGNORER end, do not remove ^^^^^^^^^ ####
-#### GH-IGNORER start, do not remote vvvvvvv ####
-#### source: Zig.gitignore
-#### size: 21
-#### hash: 3389c86c99467f36e872462555659b4a6bcb399a
+
+## Source: Zig.gitignore
 .zig-cache/
 zig-out/
-#### GH-IGNORER end, do not remove ^^^^^^^^^ ####
 
 # build artifacts
 /gh-ignorer-*
