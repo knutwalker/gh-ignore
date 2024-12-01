@@ -17,11 +17,11 @@ pub fn parse(alloc: mem.Allocator) !Opts {
             const cfg = std.io.tty.detectConfig(stdout);
 
             try stdout.writer().print(HELP, .{
-                APP,
-                DEFAULT_OUTPUT,
-                default_cache orelse "UNKNOWN",
-                fmt_color(cfg, .bold),
-                fmt_color(cfg, .reset),
+                .app = APP,
+                .default_output = DEFAULT_OUTPUT,
+                .default_cache = default_cache orelse "UNKNOWN",
+                .bold = fmt_color(cfg, .bold),
+                .reset = fmt_color(cfg, .reset),
             });
             return error.ExitSuccess;
         },
@@ -53,17 +53,17 @@ const VER = "0.1.0";
 const HELP =
     \\Creates a gitignore file from templates from github.com/github/gitignore
     \\
-    \\{3s}Usage:{4s}
-    \\    $ {0s} [OPTIONS]
+    \\{[bold]s}Usage:{[reset]s}
+    \\    $ {[app]s} [OPTIONS]
     \\
-    \\{3s}Options:{4s}
+    \\{[bold]s}Options:{[reset]s}
     \\  -o, --output <FILE>  Output to <FILE>. Can use `-` for stdout.
-    \\                       - Defaults to `{1s}`.
+    \\                       - Defaults to `{[default_output]s}`.
     \\                       - An existing file will be overwritten (this might change in the future).
     \\  -c, --cache <DIR>    Use <DIR> as the cache directory.
     \\                       - This directory contains a checked out clone of the gitignore repository.
     \\                       - If there are any weird git issues during the usage, consider deleting the cache.
-    \\                       - Defaults to `{2s}`.
+    \\                       - Defaults to `{[default_cache]s}`.
     \\  -u, --update         Force an update of the cache (git pull of the repo).
     \\                       - By default the cache is updated once a day.
     \\
@@ -98,89 +98,106 @@ const Args = struct {
 };
 
 fn parse_args_from_env(alloc: mem.Allocator) !Args {
-    const args = try std.process.argsAlloc(alloc);
-    return try parse_args(args[1..]);
-}
+    const args_slice = try std.process.argsAlloc(alloc);
+    var args = @import("args-lex").SliceArgs.init(args_slice);
 
-fn parse_args(args: anytype) !Args {
-    var help_requested = false;
-    var version_requested = false;
+    const special_flags = enum {
+        help,
+        version,
+        const HELP = @intFromEnum(@as(@This(), .help));
+        const VERSION = @intFromEnum(@as(@This(), .version));
+    };
+    var special_requested = std.enums.directEnumArrayDefault(special_flags, bool, false, 0, .{});
 
-    for (args) |arg| {
-        if (mem.eql(u8, arg, "--help") or mem.eql(u8, arg, "-h"))
-            help_requested = true;
-        if (mem.eql(u8, arg, "--version") or mem.eql(u8, arg, "-V"))
-            version_requested = true;
+    while (args.next()) |arg| {
+        switch (arg.*) {
+            .long => |l| {
+                if (std.meta.stringToEnum(special_flags, l.flag)) |flag| {
+                    special_requested[@intFromEnum(flag)] = true;
+                }
+            },
+            .shorts => |*shots| while (shots.next()) |short| switch (short) {
+                .flag => |s| {
+                    if (s == 'h') special_requested[special_flags.HELP] = true;
+                    if (s == 'V') special_requested[special_flags.VERSION] = true;
+                },
+                else => {},
+            },
+            else => {},
+        }
     }
 
-    if (help_requested) return error.Help;
-    if (version_requested) return error.Version;
+    if (special_requested[special_flags.HELP]) return error.Help;
+    if (special_requested[special_flags.VERSION]) return error.Version;
 
-    var raw_args = false;
+    args.reset();
+    _ = args.skip();
 
-    var cache_arg: enum { allow, expect, forbid } = .allow;
-    var file_arg: enum { allow, expect, forbid } = .allow;
+    const once_flags = enum { cache, output };
+    const allow_once = enum { allow, forbid };
+    var once_state = std.enums.directEnumArrayDefault(
+        once_flags,
+        allow_once,
+        .forbid,
+        0,
+        .{ .cache = .allow, .output = .allow },
+    );
 
     var opts: Args = .{};
 
-    for (args) |arg| {
-        if (raw_args == false and mem.eql(u8, arg, "--")) {
-            raw_args = true;
-            continue;
+    while (args.next()) |arg| {
+        switch (arg.*) {
+            .shorts => |*shorts| shorts: while (shorts.nextFlag()) |flag| switch (flag) {
+                'u' => opts.update = true,
+                'o', 'c' => {
+                    const raw_value = shorts.value();
+                    const value = if (raw_value.len == 0) null else raw_value;
+                    const flag_name = if (flag == 'o') "output" else "cache";
+                    arg.* = .{ .long = @import("args-lex").Arg.Long{ .flag = flag_name, .value = value } };
+                    break :shorts;
+                },
+                else => {
+                    std.debug.print("Unknown flag: -s{u}\n", .{flag});
+                    return error.UnknownFlag;
+                },
+            },
+            .value => |value| {
+                std.debug.print("Unexpected argument: {s}\n", .{value});
+                return error.UnexpectedArg;
+            },
+            .escape => if (args.nextValue()) |value| {
+                std.debug.print("Unexpected argument: {s}\n", .{value});
+                return error.UnexpectedArg;
+            },
+            else => {},
         }
 
-        if (cache_arg == .expect) {
-            cache_arg = .forbid;
-            opts.cache = arg;
-            continue;
-        }
-
-        if (file_arg == .expect) {
-            file_arg = .forbid;
-            opts.output = arg;
-            continue;
-        }
-
-        if (raw_args == false) {
-            if (mem.eql(u8, arg, "--update") or mem.eql(u8, arg, "-u")) {
+        switch (arg.*) {
+            .long => |long| if (std.meta.stringToEnum(once_flags, long.flag)) |flag| switch (flag) {
+                inline else => |f| {
+                    const flag_idx = @intFromEnum(f);
+                    if (once_state[flag_idx] == .forbid) {
+                        std.debug.print("Duplicate argument: --{s}\n", .{long.flag});
+                        return error.DuplicateArg;
+                    }
+                    if (long.value) |value| {
+                        @field(opts, @tagName(f)) = value;
+                    } else if (args.nextValue()) |value| {
+                        @field(opts, @tagName(f)) = value;
+                    } else {
+                        std.debug.print("Missing argument for --{s}\n", .{long.flag});
+                        return error.MissingArg;
+                    }
+                    once_state[flag_idx] = .forbid;
+                },
+            } else if (mem.eql(u8, long.flag, "update")) {
                 opts.update = true;
-            } else if (mem.eql(u8, arg, "--cache") or mem.eql(u8, arg, "-c")) {
-                if (cache_arg == .forbid) {
-                    std.debug.print("Duplicate argument: --cache\n", .{});
-                    return error.DuplicateArg;
-                }
-                cache_arg = .expect;
-            } else if (mem.eql(u8, arg, "--output") or mem.eql(u8, arg, "-o")) {
-                if (file_arg == .forbid) {
-                    std.debug.print("Duplicate argument: --output\n", .{});
-                    return error.DuplicateArg;
-                }
-                file_arg = .expect;
-            } else if (mem.startsWith(u8, arg, "-o")) {
-                if (file_arg == .forbid) {
-                    std.debug.print("Duplicate argument: --output\n", .{});
-                    return error.DuplicateArg;
-                }
-                file_arg = .forbid;
-                opts.output = arg[2.. :0];
             } else {
-                std.debug.print("Unknown flag: {s}\n", .{arg});
+                std.debug.print("Unknown flag: --{s}\n", .{long.flag});
                 return error.UnknownFlag;
-            }
-        } else {
-            std.debug.print("Unexpected argument: {s}\n", .{arg});
-            return error.UnexpectedArg;
+            },
+            else => {},
         }
-    }
-
-    if (cache_arg == .expect) {
-        std.debug.print("Missing argument for --cache\n", .{});
-        return error.MissingArg;
-    }
-
-    if (file_arg == .expect) {
-        std.debug.print("Missing argument for --output\n", .{});
-        return error.MissingArg;
     }
 
     return opts;

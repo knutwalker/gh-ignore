@@ -7,6 +7,7 @@ pub fn build(b: *std.Build) !void {
     const strip = b.option(bool, "strip", "Enable to strip the binary");
 
     const known_folders = b.dependency("known-folders", .{}).module("known-folders");
+    const args_lex = b.dependency("args-lex", .{}).module("args-lex");
 
     const exe = b.addExecutable(.{
         .name = "gh-ignorer",
@@ -18,6 +19,7 @@ pub fn build(b: *std.Build) !void {
     });
 
     exe.root_module.addImport("known-folders", known_folders);
+    exe.root_module.addImport("args-lex", args_lex);
 
     b.installArtifact(exe);
 
@@ -39,6 +41,7 @@ pub fn build(b: *std.Build) !void {
         .single_threaded = true,
     });
     check_exe.root_module.addImport("known-folders", known_folders);
+    check_exe.root_module.addImport("args-lex", args_lex);
 
     const check_step = b.step("check", "Check if the project compiles");
     check_step.dependOn(&check_exe.step);
@@ -77,6 +80,7 @@ pub fn build(b: *std.Build) !void {
             .single_threaded = true,
         });
         cross_exe.root_module.addImport("known-folders", known_folders);
+        cross_exe.root_module.addImport("args-lex", args_lex);
 
         const target_suffix = try t.zigTriple(b.allocator);
         const target_file = try std.mem.concat(b.allocator, u8, &.{ "gh-ignorer-", target_suffix });
