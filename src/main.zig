@@ -36,6 +36,8 @@ fn run(alloc: std.mem.Allocator, opts: args.Opts) !void {
     );
     defer checkout_dir.close();
 
+    const selected = try ignore.select_ignore_files(alloc, checkout_dir) orelse return;
+
     const output = opts.output;
     var outfile, const close_out =
         if (std.mem.eql(u8, output, "-")) .{ std.io.getStdOut(), false } else out: {
@@ -48,6 +50,5 @@ fn run(alloc: std.mem.Allocator, opts: args.Opts) !void {
     };
     defer if (close_out) outfile.close();
 
-    const selected = try ignore.select_ignore_files(alloc, checkout_dir) orelse return;
     try ignore.copy_ignore_files(checkout_dir, selected, outfile);
 }
