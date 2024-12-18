@@ -24,4 +24,4 @@ tags
 zig-out/
 
 # build artifacts
-/gh-ignorer-*
+/dist

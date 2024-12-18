@@ -17,7 +17,7 @@ pub fn parse(alloc: mem.Allocator) !Opts {
             const cfg = std.io.tty.detectConfig(stdout);
 
             try stdout.writer().print(HELP, .{
-                .app = APP,
+                .app = build_vars.app,
                 .default_output = DEFAULT_OUTPUT,
                 .default_cache = default_cache orelse "UNKNOWN",
                 .bold = fmt_color(cfg, .bold),
@@ -25,8 +25,15 @@ pub fn parse(alloc: mem.Allocator) !Opts {
             });
             return error.ExitSuccess;
         },
-        error.Version => {
-            try std.io.getStdOut().writer().print("{s} {s}\n", .{ APP, VER });
+        error.ShortVersion => {
+            try std.io.getStdOut().writer().print(SHORT_VERSION, .{
+                .app = build_vars.app,
+                .version = build_vars.version,
+            });
+            return error.ExitSuccess;
+        },
+        error.LongVersion => {
+            try std.io.getStdOut().writer().print(LONG_VERSION, build_vars);
             return error.ExitSuccess;
         },
         error.DuplicateArg, error.UnknownFlag, error.UnexpectedArg, error.MissingArg => {
@@ -46,10 +53,9 @@ pub fn parse(alloc: mem.Allocator) !Opts {
     return .{ .update = opts.update, .output = output, .cache = cache_dir.? };
 }
 
-const DEFAULT_OUTPUT = ".gitignore";
+const build_vars = @import("build_vars").vars;
+const APP = build_vars.app;
 
-const APP = "gh-ignorer";
-const VER = "0.1.0";
 const HELP =
     \\Creates a gitignore file from templates from github.com/github/gitignore
     \\
@@ -71,6 +77,21 @@ const HELP =
     \\  -V, --version        Print the version.
     \\
 ;
+
+const SHORT_VERSION =
+    \\{[app]s} {[version]s}
+    \\
+;
+
+const LONG_VERSION =
+    \\{[app]s}
+    \\Version: {[version]s}
+    \\Commit: {[sha]s}
+    \\Build Date: {[build_at]s}
+    \\
+;
+
+const DEFAULT_OUTPUT = ".gitignore";
 
 fn default_cache_dir(alloc: mem.Allocator) ?[:0]const u8 {
     const kf_cache = (kf.getPath(alloc, .cache) catch return null) orelse return null;
@@ -107,28 +128,29 @@ fn parse_args_from_env(alloc: mem.Allocator) !Args {
         const HELP = @intFromEnum(@as(@This(), .help));
         const VERSION = @intFromEnum(@as(@This(), .version));
     };
-    var special_requested = std.enums.directEnumArrayDefault(special_flags, bool, false, 0, .{});
+    var special_requested = std.enums.directEnumArrayDefault(special_flags, enum { no, short, long }, .no, 0, .{});
 
     while (args.next()) |arg| {
         switch (arg.*) {
-            .long => |l| {
-                if (std.meta.stringToEnum(special_flags, l.flag)) |flag| {
-                    special_requested[@intFromEnum(flag)] = true;
-                }
-            },
             .shorts => |*shots| while (shots.next()) |short| switch (short) {
                 .flag => |s| {
-                    if (s == 'h') special_requested[special_flags.HELP] = true;
-                    if (s == 'V') special_requested[special_flags.VERSION] = true;
+                    if (s == 'h') special_requested[special_flags.HELP] = .short;
+                    if (s == 'V') special_requested[special_flags.VERSION] = .short;
                 },
                 else => {},
+            },
+            .long => |l| {
+                if (std.meta.stringToEnum(special_flags, l.flag)) |flag| {
+                    special_requested[@intFromEnum(flag)] = .long;
+                }
             },
             else => {},
         }
     }
 
-    if (special_requested[special_flags.HELP]) return error.Help;
-    if (special_requested[special_flags.VERSION]) return error.Version;
+    if (special_requested[special_flags.HELP] != .no) return error.Help;
+    if (special_requested[special_flags.VERSION] == .short) return error.ShortVersion;
+    if (special_requested[special_flags.VERSION] == .long) return error.LongVersion;
 
     args.reset();
     _ = args.skip();

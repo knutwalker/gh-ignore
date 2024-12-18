@@ -1,16 +1,50 @@
 const std = @import("std");
 
+const APP = "gh-ignorer";
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseSafe });
-
     const strip = b.option(bool, "strip", "Enable to strip the binary");
+
+    // build vars {{{
+    const build_vars, const version = build_vars: {
+        const version = b.option([]const u8, "version", "Set the version of the binary");
+        const sha = sha: {
+            var git_ec: u8 = 0;
+            const git_out = b.runAllowFail(&.{ "git", "rev-parse", "--short=11", "HEAD" }, &git_ec, .Ignore) catch "";
+            const git_sha = std.mem.trimRight(u8, git_out, &std.ascii.whitespace);
+            break :sha if (git_sha.len > 0) git_sha else null;
+        };
+        const today = today: {
+            const secs = std.time.epoch.EpochSeconds{ .secs = std.math.lossyCast(u64, std.time.timestamp()) };
+            const date = secs.getEpochDay();
+            const year = date.calculateYearDay();
+            const month = year.calculateMonthDay();
+
+            break :today b.fmt("{}-{}-{}", .{
+                year.year,
+                month.month.numeric(),
+                month.day_index,
+            });
+        };
+
+        const build_vars = b.addOptions();
+        build_vars.addOption(struct { app: []const u8, version: []const u8, sha: []const u8, build_at: []const u8 }, "vars", .{
+            .app = APP,
+            .version = version orelse "dev",
+            .sha = sha orelse "HEAD",
+            .build_at = today,
+        });
+        break :build_vars .{ build_vars, version };
+    };
+    // }}}
 
     const known_folders = b.dependency("known-folders", .{}).module("known-folders");
     const args_lex = b.dependency("args-lex", .{}).module("args-lex");
 
     const exe = b.addExecutable(.{
-        .name = "gh-ignorer",
+        .name = APP,
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -20,6 +54,7 @@ pub fn build(b: *std.Build) !void {
 
     exe.root_module.addImport("known-folders", known_folders);
     exe.root_module.addImport("args-lex", args_lex);
+    exe.root_module.addOptions("build_vars", build_vars);
 
     b.installArtifact(exe);
 
@@ -33,7 +68,7 @@ pub fn build(b: *std.Build) !void {
     run_step.dependOn(&run_cmd.step);
 
     const check_exe = b.addExecutable(.{
-        .name = "gh-ignorer",
+        .name = APP,
         .root_source_file = b.path("src/main.zig"),
         .target = b.resolveTargetQuery(.{}),
         .optimize = .Debug,
@@ -42,6 +77,7 @@ pub fn build(b: *std.Build) !void {
     });
     check_exe.root_module.addImport("known-folders", known_folders);
     check_exe.root_module.addImport("args-lex", args_lex);
+    check_exe.root_module.addOptions("build_vars", build_vars);
 
     const check_step = b.step("check", "Check if the project compiles");
     check_step.dependOn(&check_exe.step);
@@ -57,37 +93,55 @@ pub fn build(b: *std.Build) !void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
 
+    // dist {{{
+    const dist_step = b.step("dist", "Build release distribution");
+
+    const clean_dist = b.addRemoveDirTree("dist");
+    dist_step.dependOn(&clean_dist.step);
+
     const targets: []const std.Target.Query = &.{
         .{ .cpu_arch = .aarch64, .os_tag = .macos, .abi = .none },
         .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc },
         .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu },
-        .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl },
         .{ .cpu_arch = .x86_64, .os_tag = .macos, .abi = .none },
         .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc },
         .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
-        .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
     };
-
-    const cross_step = b.step("cross", "Cross compile the binary");
 
     for (targets) |t| {
         const cross_exe = b.addExecutable(.{
-            .name = "gh-ignorer",
+            .name = APP,
             .root_source_file = b.path("src/main.zig"),
             .target = b.resolveTargetQuery(t),
-            .optimize = optimize,
-            .strip = strip,
+            .optimize = .ReleaseSafe,
+            .strip = true,
             .single_threaded = true,
         });
         cross_exe.root_module.addImport("known-folders", known_folders);
         cross_exe.root_module.addImport("args-lex", args_lex);
+        cross_exe.root_module.addOptions("build_vars", build_vars);
 
-        const target_suffix = try t.zigTriple(b.allocator);
-        const target_file = try std.mem.concat(b.allocator, u8, &.{ "gh-ignorer-", target_suffix });
+        const vers = if (version) |v| b.fmt("-v{s}", .{v}) else "";
+        // see `go tool dist list` and
+        // https://github.com/cli/gh-extension-precompile/blob/561b19/README.md#extensions-written-in-other-compiled-languages
+        const os, const ext = switch (t.os_tag.?) {
+            .macos => .{ "darwin", "" },
+            .linux => .{ "linux", "" },
+            .windows => .{ "windows", ".exe" },
+            else => unreachable,
+        };
+        const arch = switch (t.cpu_arch.?) {
+            .aarch64 => "arm64",
+            .x86_64 => "amd64",
+            else => unreachable,
+        };
+        const target_file = b.fmt("{s}{s}-{s}-{s}{s}", .{ APP, vers, os, arch, ext });
 
         const target_out = b.addInstallArtifact(cross_exe, .{
+            .dest_dir = .{ .override = .{ .custom = "../dist" } },
             .dest_sub_path = target_file,
         });
-        cross_step.dependOn(&target_out.step);
+        dist_step.dependOn(&target_out.step);
     }
+    // }}}
 }

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-set -e
-zig build cross -Drelease -Dstrip=true --summary all
-mv ./zig-out/bin/gh-ignorer-* .
+set -euo pipefail
+zig build dist -Dversion=$1 --summary all
 
