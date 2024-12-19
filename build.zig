@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const APP = "gh-ignorer";
+const APP = "gh-ignore";
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
