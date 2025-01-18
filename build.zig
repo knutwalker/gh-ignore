@@ -99,49 +99,53 @@ pub fn build(b: *std.Build) !void {
     const clean_dist = b.addRemoveDirTree("dist");
     dist_step.dependOn(&clean_dist.step);
 
-    const targets: []const std.Target.Query = &.{
-        .{ .cpu_arch = .aarch64, .os_tag = .macos, .abi = .none },
-        .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc },
-        .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu },
-        .{ .cpu_arch = .x86_64, .os_tag = .macos, .abi = .none },
-        .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc },
-        .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
-    };
+    for (&[_]std.Target.Os.Tag{ .macos, .windows, .linux }) |os| {
+        for (&[_]std.Target.Cpu.Arch{ .aarch64, .x86_64 }) |arch| {
+            var target_query = target.query;
+            target_query.cpu_arch = arch;
+            target_query.cpu_model = .baseline;
+            target_query.os_tag = os;
+            target_query.abi = switch (os) {
+                .macos => .none,
+                .windows => .msvc,
+                .linux => .gnu,
+                else => unreachable,
+            };
 
-    for (targets) |t| {
-        const cross_exe = b.addExecutable(.{
-            .name = APP,
-            .root_source_file = b.path("src/main.zig"),
-            .target = b.resolveTargetQuery(t),
-            .optimize = .ReleaseSafe,
-            .strip = true,
-            .single_threaded = true,
-        });
-        cross_exe.root_module.addImport("known-folders", known_folders);
-        cross_exe.root_module.addImport("args-lex", args_lex);
-        cross_exe.root_module.addOptions("build_vars", build_vars);
+            const cross_exe = b.addExecutable(.{
+                .name = APP,
+                .root_source_file = b.path("src/main.zig"),
+                .target = b.resolveTargetQuery(target_query),
+                .optimize = .ReleaseSafe,
+                .strip = true,
+                .single_threaded = true,
+            });
+            cross_exe.root_module.addImport("known-folders", known_folders);
+            cross_exe.root_module.addImport("args-lex", args_lex);
+            cross_exe.root_module.addOptions("build_vars", build_vars);
 
-        const vers = if (version) |v| b.fmt("-v{s}", .{v}) else "";
-        // see `go tool dist list` and
-        // https://github.com/cli/gh-extension-precompile/blob/561b19/README.md#extensions-written-in-other-compiled-languages
-        const os, const ext = switch (t.os_tag.?) {
-            .macos => .{ "darwin", "" },
-            .linux => .{ "linux", "" },
-            .windows => .{ "windows", ".exe" },
-            else => unreachable,
-        };
-        const arch = switch (t.cpu_arch.?) {
-            .aarch64 => "arm64",
-            .x86_64 => "amd64",
-            else => unreachable,
-        };
-        const target_file = b.fmt("{s}{s}-{s}-{s}{s}", .{ APP, vers, os, arch, ext });
+            // see `go tool dist list` and
+            // https://github.com/cli/gh-extension-precompile/blob/561b19/README.md#extensions-written-in-other-compiled-languages
+            const go_os, const ext = switch (os) {
+                .macos => .{ "darwin", "" },
+                .linux => .{ "linux", "" },
+                .windows => .{ "windows", ".exe" },
+                else => unreachable,
+            };
+            const go_arch = switch (arch) {
+                .aarch64 => "arm64",
+                .x86_64 => "amd64",
+                else => unreachable,
+            };
+            const vers = if (version) |v| b.fmt("-v{s}", .{v}) else "";
+            const target_file = b.fmt("{s}{s}-{s}-{s}{s}", .{ APP, vers, go_os, go_arch, ext });
 
-        const target_out = b.addInstallArtifact(cross_exe, .{
-            .dest_dir = .{ .override = .{ .custom = "../dist" } },
-            .dest_sub_path = target_file,
-        });
-        dist_step.dependOn(&target_out.step);
+            const target_out = b.addInstallArtifact(cross_exe, .{
+                .dest_dir = .{ .override = .{ .custom = "../dist" } },
+                .dest_sub_path = target_file,
+            });
+            dist_step.dependOn(&target_out.step);
+        }
     }
     // }}}
 }
