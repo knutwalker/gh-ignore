@@ -3,7 +3,9 @@ const args = @import("args.zig");
 const cache = @import("cache.zig");
 const ignore = @import("ignore.zig");
 
-pub const known_folders_config = .{ .xdg_on_mac = true };
+pub const known_folders_config = @import("known-folders").KnownFolderConfig{
+    .xdg_on_mac = true,
+};
 
 pub fn main() !u8 {
     var ally = std.heap.ArenaAllocator.init(std.heap.page_allocator);

@@ -8,8 +8,8 @@
             .hash = "12205f5e7505c96573f6fc5144592ec38942fb0a326d692f9cddc0c7dd38f9028f29",
         },
         .@"args-lex" = .{
-            .url = "git+https://github.com/knutwalker/args-lex.git#4137adf186dfbbfc7155ca6ae119515e48e15fab",
-            .hash = "1220daef6a18f788402f4db274cd1e6370c71122806951e49aed2911f726cc93da4b",
+            .url = "git+https://github.com/knutwalker/args-lex.git#ca1abb08bfc3b7ab3fec299357da01fd4a56543c",
+            .hash = "1220dec2eca332195425b4dccbb7cbe64696875f0fdb8836536406610fc79e9769c8",
         },
     },
     .paths = .{

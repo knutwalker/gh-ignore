@@ -96,7 +96,7 @@ pub fn build(b: *std.Build) !void {
     // dist {{{
     const dist_step = b.step("dist", "Build release distribution");
 
-    const clean_dist = b.addRemoveDirTree("dist");
+    const clean_dist = b.addRemoveDirTree(b.path("dist"));
     dist_step.dependOn(&clean_dist.step);
 
     for (&[_]std.Target.Os.Tag{ .macos, .windows, .linux }) |os| {
