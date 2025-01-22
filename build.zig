@@ -30,12 +30,11 @@ pub fn build(b: *std.Build) !void {
         };
 
         const build_vars = b.addOptions();
-        build_vars.addOption(struct { app: []const u8, version: []const u8, sha: []const u8, build_at: []const u8 }, "vars", .{
-            .app = APP,
-            .version = version orelse "dev",
-            .sha = sha orelse "HEAD",
-            .build_at = today,
-        });
+        build_vars.addOption([]const u8, "app", APP);
+        build_vars.addOption([]const u8, "version", version orelse "dev");
+        build_vars.addOption([]const u8, "sha", sha orelse "HEAD");
+        build_vars.addOption([]const u8, "build_at", today);
+
         break :build_vars .{ build_vars, version };
     };
     // }}}

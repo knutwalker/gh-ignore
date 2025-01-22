@@ -1,5 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
+
+const bv = @import("build_vars");
 const kf = @import("known-folders");
 
 pub const Opts = struct {
@@ -17,7 +19,7 @@ pub fn parse(alloc: mem.Allocator) !Opts {
             const cfg = std.io.tty.detectConfig(stdout);
 
             try stdout.writer().print(HELP, .{
-                .app = build_vars.app,
+                .app = bv.app,
                 .default_output = DEFAULT_OUTPUT,
                 .default_cache = default_cache orelse "UNKNOWN",
                 .bold = fmt_color(cfg, .bold),
@@ -27,13 +29,18 @@ pub fn parse(alloc: mem.Allocator) !Opts {
         },
         error.ShortVersion => {
             try std.io.getStdOut().writer().print(SHORT_VERSION, .{
-                .app = build_vars.app,
-                .version = build_vars.version,
+                .app = bv.app,
+                .version = bv.version,
             });
             return error.ExitSuccess;
         },
         error.LongVersion => {
-            try std.io.getStdOut().writer().print(LONG_VERSION, build_vars);
+            try std.io.getStdOut().writer().print(LONG_VERSION, .{
+                .app = bv.app,
+                .version = bv.version,
+                .sha = bv.sha,
+                .build_at = bv.build_at,
+            });
             return error.ExitSuccess;
         },
         error.DuplicateArg, error.UnknownFlag, error.UnexpectedArg, error.MissingArg => {
@@ -52,9 +59,6 @@ pub fn parse(alloc: mem.Allocator) !Opts {
 
     return .{ .update = opts.update, .output = output, .cache = cache_dir.? };
 }
-
-const build_vars = @import("build_vars").vars;
-const APP = build_vars.app;
 
 const HELP =
     \\Creates a gitignore file from templates from github.com/github/gitignore
@@ -95,7 +99,7 @@ const DEFAULT_OUTPUT = ".gitignore";
 
 fn default_cache_dir(alloc: mem.Allocator) ?[:0]const u8 {
     const kf_cache = (kf.getPath(alloc, .cache) catch return null) orelse return null;
-    return std.fs.path.joinZ(alloc, &.{ kf_cache, APP }) catch return null;
+    return std.fs.path.joinZ(alloc, &.{ kf_cache, bv.app }) catch return null;
 }
 
 fn fmt_color(config: std.io.tty.Config, color: std.io.tty.Color) std.fmt.Formatter(format_color) {
